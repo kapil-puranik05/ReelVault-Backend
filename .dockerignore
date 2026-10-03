@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.local
+data/
+.pytest_cache/
+.sixth/
+tests/
+supabase/
+README.md
+render.yaml
