@@ -87,6 +87,19 @@ def access_reason(row: dict[str, Any], now: datetime | None = None) -> str:
     return "NONE"
 
 
+def owner_from_notes(entity: dict[str, Any]) -> str | None:
+    """The ReelVault user a Razorpay object belongs to, read from its notes, ONLY if it carries our tag.
+    Other products on the same Razorpay account may also put a `user_id` in their notes; those must be ignored."""
+    notes = entity.get("notes") or {}
+    return notes.get("user_id") if notes.get("app") == razorpay_client.APP_TAG else None
+
+
+def same_mode(row: dict[str, Any]) -> bool:
+    """False when the user's stored Razorpay subscription was created under the other key mode
+    (e.g. a test-mode checkout left over after switching to live keys): Razorpay can't see it."""
+    return row.get("razorpay_mode", "test") == razorpay_client.current_mode()
+
+
 def apply_razorpay_subscription(user_id: str, rz: dict[str, Any]) -> dict[str, Any]:
     """Write a Razorpay subscription entity's state onto the user's row (idempotent)."""
     row = ensure_subscription(user_id)

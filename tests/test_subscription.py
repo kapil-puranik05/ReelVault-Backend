@@ -16,7 +16,7 @@ from api.deps import CurrentUser, get_current_user
 from api.main import app
 from api.rate_limit import _buckets
 from pipeline.config import settings
-from pipeline.storage import subscription_store, supabase_store
+from pipeline.storage import payment_store, subscription_store, supabase_store
 
 USER = "11111111-1111-1111-1111-111111111111"
 OTHER = "22222222-2222-2222-2222-222222222222"
@@ -28,6 +28,7 @@ class FakeDb:
         self.subs: dict[str, dict] = {}
         self.plans: dict[tuple, str] = {}
         self.events: set[str] = set()
+        self.payments: dict[str, dict] = {}
 
     def install(self, monkeypatch):
         db = self
@@ -58,10 +59,10 @@ class FakeDb:
         def update(user_id, fields):
             db.subs[user_id].update(fields)
 
-        def claim(user_id, new_id, expected):
+        def claim(user_id, new_id, expected, mode):
             if db.subs[user_id].get("razorpay_subscription_id") != expected:
                 return False
-            db.subs[user_id].update({"razorpay_subscription_id": new_id, "status": "PENDING"})
+            db.subs[user_id].update({"razorpay_subscription_id": new_id, "status": "PENDING", "razorpay_mode": mode})
             return True
 
         def record_event(eid, event):
@@ -76,8 +77,10 @@ class FakeDb:
         monkeypatch.setattr(subscription_store, "start_trial_if_unstarted", start_trial_if_unstarted)
         monkeypatch.setattr(subscription_store, "update", update)
         monkeypatch.setattr(subscription_store, "claim_razorpay_subscription", claim)
-        monkeypatch.setattr(subscription_store, "get_plan_id", lambda a, c, p="monthly": db.plans.get((a, c, p)))
-        monkeypatch.setattr(subscription_store, "save_plan", lambda pid, a, c, p="monthly": db.plans.__setitem__((a, c, p), pid))
+        monkeypatch.setattr(subscription_store, "get_plan_id", lambda a, c, m, p="monthly": db.plans.get((a, c, m, p)))
+        monkeypatch.setattr(subscription_store, "save_plan", lambda pid, a, c, m, p="monthly": db.plans.__setitem__((a, c, m, p), pid))
+        monkeypatch.setattr(payment_store, "get", lambda pid: dict(db.payments[pid]) if pid in db.payments else None)
+        monkeypatch.setattr(payment_store, "upsert", lambda row: db.payments.__setitem__(row["id"], dict(row)))
         monkeypatch.setattr(subscription_store, "record_event", record_event)
         monkeypatch.setattr(subscription_store, "forget_event", lambda eid: db.events.discard(eid))
 
@@ -97,6 +100,8 @@ class FakeRazorpay:
         self.subscriptions: dict[str, dict] = {}
         self.created_plans: list[tuple[int, str]] = []
         self.created_subs = 0
+        self.invoices: dict[str, dict] = {}
+        self.payments: dict[str, dict] = {}
 
     def install(self, monkeypatch):
         rz = self
@@ -107,7 +112,7 @@ class FakeRazorpay:
 
         def create_subscription(plan_id, total_count, user_id):
             rz.created_subs += 1
-            sub = {"id": f"sub_{rz.created_subs}", "status": "created", "notes": {"user_id": user_id},
+            sub = {"id": f"sub_{rz.created_subs}", "status": "created", "notes": {"user_id": user_id, "app": "reelvault"},
                    "short_url": f"https://rzp.io/i/sub_{rz.created_subs}", "plan_id": plan_id}
             rz.subscriptions[sub["id"]] = sub
             return dict(sub)
@@ -115,6 +120,8 @@ class FakeRazorpay:
         monkeypatch.setattr(razorpay_client, "create_plan", create_plan)
         monkeypatch.setattr(razorpay_client, "create_subscription", create_subscription)
         monkeypatch.setattr(razorpay_client, "fetch_subscription", lambda sid: dict(rz.subscriptions[sid]))
+        monkeypatch.setattr(razorpay_client, "fetch_invoice", lambda iid: dict(rz.invoices[iid]))
+        monkeypatch.setattr(razorpay_client, "fetch_payment", lambda pid: dict(rz.payments[pid]))
 
     def activate(self, sid):
         now = int(datetime.now(timezone.utc).timestamp())
@@ -137,8 +144,13 @@ def env(monkeypatch):
     app.dependency_overrides.clear()
 
 
-def signed_webhook(client, event, entity, event_id="evt_1"):
-    body = json.dumps({"event": event, "payload": {"subscription": {"entity": entity}}}).encode()
+def signed_webhook(client, event, entity, event_id="evt_1", payment=None, refund=None):
+    payload = {"subscription": {"entity": entity}} if entity is not None else {}
+    if payment is not None:
+        payload["payment"] = {"entity": payment}
+    if refund is not None:
+        payload["refund"] = {"entity": refund}
+    body = json.dumps({"event": event, "payload": payload}).encode()
     sig = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
     return client.post("/api/subscription/webhook", content=body,
                        headers={"X-Razorpay-Signature": sig, "X-Razorpay-Event-Id": event_id})
@@ -233,6 +245,23 @@ def test_price_change_creates_a_new_plan(env, monkeypatch):
     monkeypatch.setattr(settings, "paid_plan_price", 49.5)
     client.post("/api/subscription/create")
     assert rz.created_plans == [(100, "INR"), (4950, "INR")]
+
+
+def test_live_keys_never_reuse_a_test_mode_plan_or_checkout(env, monkeypatch):
+    db, rz, client = env
+    db.set_trial(USER, days_from_now=-1)
+    test_checkout = client.post("/api/subscription/create").json()["subscriptionId"]
+    assert db.subs[USER]["razorpay_mode"] == "test" and len(rz.created_plans) == 1
+
+    # Backend is redeployed with live keys: the test plan and the user's pending test checkout don't exist there.
+    monkeypatch.setattr(settings, "razorpay_key_id", "rzp_live_key")
+    assert client.get("/api/subscription").json()["status"] == "PENDING"  # no Razorpay lookup of the test sub
+    assert client.post("/api/subscription/verify").status_code == 400
+    assert client.get("/api/subscription/receipts").json() == {"receipts": []}
+    live_checkout = client.post("/api/subscription/create").json()["subscriptionId"]
+    assert live_checkout != test_checkout
+    assert len(rz.created_plans) == 2  # a new plan was made for live; the cached test plan was not reused
+    assert db.subs[USER]["razorpay_subscription_id"] == live_checkout and db.subs[USER]["razorpay_mode"] == "live"
 
 
 def test_access_is_not_granted_until_backend_verifies_payment(env):

@@ -62,13 +62,13 @@ def update(user_id: str, fields: dict[str, Any]) -> None:
     get_client().table("subscriptions").update(fields).eq("user_id", user_id).execute()
 
 
-def claim_razorpay_subscription(user_id: str, new_id: str, expected_current: str | None) -> bool:
+def claim_razorpay_subscription(user_id: str, new_id: str, expected_current: str | None, mode: str) -> bool:
     """Compare-and-set of razorpay_subscription_id, so two concurrent 'Subscribe'
     taps can't both attach a different subscription to the same user."""
     query = (
         get_client()
         .table("subscriptions")
-        .update({"razorpay_subscription_id": new_id, "status": "PENDING"})
+        .update({"razorpay_subscription_id": new_id, "status": "PENDING", "razorpay_mode": mode})
         .eq("user_id", user_id)
     )
     query = query.is_("razorpay_subscription_id", "null") if expected_current is None else query.eq(
@@ -77,7 +77,7 @@ def claim_razorpay_subscription(user_id: str, new_id: str, expected_current: str
     return len(query.execute().data) > 0
 
 
-def get_plan_id(amount_minor: int, currency: str, period: str = "monthly") -> str | None:
+def get_plan_id(amount_minor: int, currency: str, mode: str, period: str = "monthly") -> str | None:
     res = (
         get_client()
         .table("billing_plans")
@@ -85,15 +85,16 @@ def get_plan_id(amount_minor: int, currency: str, period: str = "monthly") -> st
         .eq("amount_minor", amount_minor)
         .eq("currency", currency)
         .eq("period", period)
+        .eq("mode", mode)
         .limit(1)
         .execute()
     )
     return res.data[0]["id"] if res.data else None
 
 
-def save_plan(plan_id: str, amount_minor: int, currency: str, period: str = "monthly") -> None:
+def save_plan(plan_id: str, amount_minor: int, currency: str, mode: str, period: str = "monthly") -> None:
     get_client().table("billing_plans").upsert(
-        {"id": plan_id, "amount_minor": amount_minor, "currency": currency, "period": period},
+        {"id": plan_id, "amount_minor": amount_minor, "currency": currency, "period": period, "mode": mode},
         on_conflict="id",
         ignore_duplicates=True,
     ).execute()

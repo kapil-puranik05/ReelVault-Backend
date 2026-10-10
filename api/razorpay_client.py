@@ -21,10 +21,20 @@ logger = logging.getLogger("reelvault.razorpay")
 
 _BASE_URL = "https://api.razorpay.com/v1"
 
+# Stamped into the notes of every subscription we create. The Razorpay account is shared with other
+# products (webhooks for all of them reach us), so this tag is how we recognise our own objects.
+APP_TAG = "reelvault"
+
 
 def to_minor_units(amount: float | Decimal | str) -> int:
     """Rupees -> paise (INR has 100 minor units): 1 -> 100, 0.5 -> 50."""
     return int((Decimal(str(amount)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def current_mode() -> str:
+    """'live' when running on rzp_live_ keys, else 'test'. Razorpay's test and live accounts are
+    separate worlds (own plans, subscriptions, payments), so every stored id is tagged with this."""
+    return "live" if settings.razorpay_key_id.startswith("rzp_live_") else "test"
 
 
 def _require_configured() -> None:
@@ -73,12 +83,20 @@ def create_subscription(plan_id: str, total_count: int, user_id: str) -> dict[st
     return _request(
         "POST",
         "/subscriptions",
-        {"plan_id": plan_id, "total_count": total_count, "customer_notify": 1, "notes": {"user_id": user_id}},
+        {"plan_id": plan_id, "total_count": total_count, "customer_notify": 1, "notes": {"user_id": user_id, "app": APP_TAG}},
     )
 
 
 def fetch_subscription(subscription_id: str) -> dict[str, Any]:
     return _request("GET", f"/subscriptions/{subscription_id}")
+
+
+def fetch_payment(payment_id: str) -> dict[str, Any]:
+    return _request("GET", f"/payments/{payment_id}")
+
+
+def fetch_invoice(invoice_id: str) -> dict[str, Any]:
+    return _request("GET", f"/invoices/{invoice_id}")
 
 
 def list_invoices(subscription_id: str, count: int = 50) -> list[dict[str, Any]]:
