@@ -100,6 +100,37 @@ def verify_subscription(user: CurrentUser = Depends(get_current_user)):
     return subscription_logic.to_dto(row)
 
 
+@router.get("/receipts")
+def list_receipts(user: CurrentUser = Depends(get_current_user)):
+    """The caller's own payment receipts, read live from Razorpay. The subscription id comes
+    from our DB row for the authenticated user — never from the request — so one user can't
+    request another's receipts. Nothing is stored or fabricated here."""
+    check_rate_limit(f"sub:receipts:{user.id}", limit=30, window_seconds=60)
+    row = subscription_logic.ensure_subscription(user.id)
+    rz_id = row.get("razorpay_subscription_id")
+    if not rz_id:
+        return {"receipts": []}
+
+    receipts = []
+    for inv in razorpay_client.list_invoices(rz_id):
+        if (inv.get("notes") or {}).get("user_id", user.id) != user.id:
+            continue
+        # Only charges that actually went through are receipts.
+        if inv.get("status") != "paid":
+            continue
+        receipts.append({
+            "id": inv["id"],
+            "amount": (inv.get("amount_paid") or inv.get("amount") or 0) / 100,
+            "currency": inv.get("currency", settings.paid_plan_currency),
+            "status": inv["status"],
+            "paidAt": subscription_logic._from_unix(inv.get("paid_at")),
+            "description": inv.get("description") or "ReelVault Premium",
+            "receiptUrl": inv.get("short_url"),
+        })
+    receipts.sort(key=lambda r: r["paidAt"] or "", reverse=True)
+    return {"receipts": receipts}
+
+
 _HANDLED_EVENTS = {
     "subscription.authenticated",
     "subscription.activated",

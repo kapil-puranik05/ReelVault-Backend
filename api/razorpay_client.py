@@ -81,6 +81,12 @@ def fetch_subscription(subscription_id: str) -> dict[str, Any]:
     return _request("GET", f"/subscriptions/{subscription_id}")
 
 
+def list_invoices(subscription_id: str, count: int = 50) -> list[dict[str, Any]]:
+    """Invoices Razorpay issued for one subscription (each charge produces one)."""
+    data = _request("GET", f"/invoices?subscription_id={subscription_id}&count={count}")
+    return data.get("items") or []
+
+
 def verify_webhook_signature(raw_body: bytes, signature: str | None) -> bool:
     secret = settings.razorpay_webhook_secret
     if not secret or not signature:

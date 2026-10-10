@@ -35,6 +35,7 @@ class CurrentUser:
     id: str  # Supabase user id (the `sub` claim) — used directly as the Postgres user_id / RLS auth.uid()
     email: str
     issued_at: int | None = None  # JWT `iat` — used as a lastSignIn proxy, see routes/user.py
+    name: str = ""  # display_name set at sign-up (JWT user_metadata); may be empty
 
 
 @lru_cache(maxsize=1)
@@ -78,7 +79,9 @@ def get_current_user(authorization: str | None = Header(default=None)) -> Curren
     if not sub:
         raise ApiError(401, "Token is missing a subject claim")
 
-    return CurrentUser(id=sub, email=payload.get("email", ""), issued_at=payload.get("iat"))
+    meta = payload.get("user_metadata") or {}
+    name = str(meta.get("display_name") or meta.get("name") or meta.get("full_name") or "").strip()
+    return CurrentUser(id=sub, email=payload.get("email", ""), issued_at=payload.get("iat"), name=name)
 
 
 def require_active_subscription(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
