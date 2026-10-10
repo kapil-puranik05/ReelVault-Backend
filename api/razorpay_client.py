@@ -95,6 +95,11 @@ def fetch_payment(payment_id: str) -> dict[str, Any]:
     return _request("GET", f"/payments/{payment_id}")
 
 
+def update_payment_notes(payment_id: str, notes: dict[str, Any]) -> dict[str, Any]:
+    """Razorpay only allows the `notes` of a payment to be edited (PATCH /payments/:id); nothing else changes."""
+    return _request("PATCH", f"/payments/{payment_id}", {"notes": notes})
+
+
 def fetch_invoice(invoice_id: str) -> dict[str, Any]:
     return _request("GET", f"/invoices/{invoice_id}")
 

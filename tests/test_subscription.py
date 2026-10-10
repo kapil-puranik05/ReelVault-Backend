@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from api import razorpay_client
 from api.deps import CurrentUser, get_current_user
+from api.errors import ApiError
 from api.main import app
 from api.rate_limit import _buckets
 from pipeline.config import settings
@@ -102,6 +103,8 @@ class FakeRazorpay:
         self.created_subs = 0
         self.invoices: dict[str, dict] = {}
         self.payments: dict[str, dict] = {}
+        self.payment_note_updates: list[tuple[str, dict]] = []
+        self.fail_note_updates = False
 
     def install(self, monkeypatch):
         rz = self
@@ -122,6 +125,14 @@ class FakeRazorpay:
         monkeypatch.setattr(razorpay_client, "fetch_subscription", lambda sid: dict(rz.subscriptions[sid]))
         monkeypatch.setattr(razorpay_client, "fetch_invoice", lambda iid: dict(rz.invoices[iid]))
         monkeypatch.setattr(razorpay_client, "fetch_payment", lambda pid: dict(rz.payments[pid]))
+
+        def update_payment_notes(pid, notes):
+            if rz.fail_note_updates:
+                raise ApiError(502, "provider down")
+            rz.payment_note_updates.append((pid, dict(notes)))
+            return {"id": pid, "notes": notes}
+
+        monkeypatch.setattr(razorpay_client, "update_payment_notes", update_payment_notes)
 
     def activate(self, sid):
         now = int(datetime.now(timezone.utc).timestamp())

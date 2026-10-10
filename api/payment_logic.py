@@ -86,4 +86,21 @@ def record_payment(payment: dict[str, Any], subscription: dict[str, Any] | None 
         "livemode": razorpay_client.current_mode() == "live",
         "razorpay_created_at": _to_iso(payment.get("created_at")),
     })
+    _tag_payment_at_razorpay(payment)
     return True
+
+
+def _tag_payment_at_razorpay(payment: dict[str, Any]) -> None:
+    """Write `app` / `project` into the payment's Razorpay notes, so the Razorpay dashboard (payment details,
+    exports) shows which product the money came from. Razorpay does not copy a subscription's notes onto its
+    payments. Best-effort and idempotent: a failure only costs the label, never the ledger row or the webhook."""
+    notes = payment.get("notes")
+    notes = notes if isinstance(notes, dict) else {}  # Razorpay sends [] when a payment has no notes
+    if notes.get("app") == razorpay_client.APP_TAG:
+        return
+    try:
+        razorpay_client.update_payment_notes(
+            payment["id"], {**notes, "app": razorpay_client.APP_TAG, "project": "ReelVault"}
+        )
+    except ApiError as exc:
+        logger.warning("Could not tag payment %s at Razorpay: %s", payment["id"], exc.message)

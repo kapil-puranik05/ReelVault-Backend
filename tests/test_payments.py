@@ -146,3 +146,34 @@ def test_reelvault_tagged_subscription_unknown_to_db_is_still_applied(env):
             "notes": {"user_id": USER, "app": "reelvault"}}
     assert signed_webhook(client, "subscription.activated", ours, "evt_race").json()["status"] == "ok"
     assert db.subs[USER]["status"] == "ACTIVE" and db.subs[USER]["razorpay_subscription_id"] == "sub_race"
+
+
+# ── Labelling payments at Razorpay so the dashboard shows which project they belong to ──
+
+def test_our_payment_is_tagged_with_the_project_at_razorpay_once(ready):
+    _, rz, client = ready
+    signed_webhook(client, "subscription.charged", SUB, "evt_1", payment=pay(notes=[]))  # Razorpay sends [] for none
+    assert rz.payment_note_updates == [("pay_1", {"app": "reelvault", "project": "ReelVault"})]
+    # Later events already carry the tag: nothing more to write.
+    signed_webhook(client, "payment.captured", None, "evt_2", payment=pay(notes={"app": "reelvault", "project": "ReelVault"}))
+    assert len(rz.payment_note_updates) == 1
+
+
+def test_existing_payment_notes_are_kept_when_tagging(ready):
+    _, rz, client = ready
+    signed_webhook(client, "subscription.charged", SUB, "evt_1", payment=pay(notes={"order_ref": "A-42"}))
+    assert rz.payment_note_updates == [("pay_1", {"order_ref": "A-42", "app": "reelvault", "project": "ReelVault"})]
+
+
+def test_other_products_payments_are_never_touched_at_razorpay(ready):
+    _, rz, client = ready
+    rz.invoices["inv_n"] = {"id": "inv_n", "subscription_id": "sub_nosher"}
+    signed_webhook(client, "payment.captured", None, "evt_n", payment=pay(id="pay_n", invoice_id="inv_n", notes=[]))
+    assert rz.payment_note_updates == []
+
+
+def test_tagging_failure_does_not_lose_the_payment_or_fail_the_webhook(ready):
+    db, rz, client = ready
+    rz.fail_note_updates = True
+    res = signed_webhook(client, "subscription.charged", SUB, "evt_1", payment=pay())
+    assert res.status_code == 200 and db.payments["pay_1"]["status"] == "captured"
