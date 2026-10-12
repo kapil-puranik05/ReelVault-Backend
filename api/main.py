@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api import reel_jobs
 from api.errors import register_error_handlers
-from api.routes import help_center, reels, subscription, user
+from api.routes import admin, auth_notice, help_center, reels, subscription, user
 
 # uvicorn only configures its own loggers; give ours (reel cost, errors) a visible INFO handler.
 _log = logging.getLogger("reelvault")
@@ -51,6 +51,8 @@ app.include_router(reels.router)
 app.include_router(user.router)
 app.include_router(subscription.router)
 app.include_router(help_center.router)
+app.include_router(admin.router)
+app.include_router(auth_notice.router)
 
 
 @app.get("/")

@@ -100,6 +100,10 @@ class PipelineSettings(BaseSettings):
     reel_job_max_attempts: int = Field(default=3)
     reel_job_max_active_per_user: int = Field(default=10)
 
+    # Shared secret between the admin dashboard (a separate website) and this backend's /api/admin endpoints.
+    # Empty = those endpoints are switched off (they fail closed).
+    admin_api_key: str = Field(default="", description="ADMIN_API_KEY, at least 24 characters")
+
     # Push notifications go through Expo's free push service. The token is only needed if "Enhanced Push Security"
     # is switched on for the Expo project; leave empty otherwise.
     expo_access_token: str = Field(default="", description="EXPO_ACCESS_TOKEN, optional")

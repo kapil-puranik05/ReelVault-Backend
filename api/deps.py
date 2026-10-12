@@ -80,8 +80,11 @@ def get_current_user(authorization: str | None = Header(default=None)) -> Curren
     if not sub:
         raise ApiError(401, "Token is missing a subject claim")
 
-    if account_guard.is_deleted(sub):
+    state = account_guard.check(sub)
+    if state == "deleted":
         raise ApiError(401, "This account has been deleted.", code="ACCOUNT_DELETED")
+    if state == "suspended":
+        raise ApiError(403, "Your account has been suspended.", code="ACCOUNT_SUSPENDED")
 
     meta = payload.get("user_metadata") or {}
     name = str(meta.get("display_name") or meta.get("name") or meta.get("full_name") or "").strip()

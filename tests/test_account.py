@@ -15,7 +15,7 @@ from api.errors import ApiError
 from api.main import app
 from api.rate_limit import _buckets
 from pipeline.config import settings
-from pipeline.storage import account_store, subscription_store
+from pipeline.storage import account_store, admin_store, subscription_store
 from tests.test_subscription import OTHER, USER, FakeDb, FakeRazorpay
 
 SECRET = "test-jwt-secret-test-jwt-secret-1234"
@@ -33,14 +33,15 @@ class FakeAuth:
         self.fail_delete = 0
         self.outage = False
         self.log: list[str] = []
+        self.notices: list[tuple[str, str, str]] = []  # (email, user id, deleted_by)
 
     def install(self, monkeypatch):
         auth = self
 
-        def user_exists(uid):
+        def get_status(uid):
             if auth.outage:
                 raise RuntimeError("supabase down")
-            return uid in auth.users
+            return "ok" if uid in auth.users else "missing"
 
         def delete_auth_user(uid):
             if auth.fail_delete:
@@ -49,7 +50,8 @@ class FakeAuth:
             auth.log.append(f"delete:{uid}")
             auth.users.discard(uid)
 
-        monkeypatch.setattr(account_store, "user_exists", user_exists)
+        monkeypatch.setattr(account_store, "get_status", get_status)
+        monkeypatch.setattr(admin_store, "record_deleted", lambda email, uid, by: auth.notices.append((email, uid, by)))
         monkeypatch.setattr(account_store, "delete_auth_user", delete_auth_user)
 
 
@@ -143,7 +145,7 @@ def test_account_deleted_elsewhere_is_rejected_after_the_cache_expires(acct):
     headers = token_for(USER)
     assert client.get("/api/user/me", headers=headers).status_code == 200
     auth.users.discard(USER)  # e.g. removed from the Supabase dashboard
-    account_guard._alive.clear()  # the positive answer was only cached for a few minutes
+    account_guard._state.clear()  # the positive answer was only cached for a few minutes
     assert client.get("/api/user/me", headers=headers).status_code == 401
 
 
@@ -228,3 +230,9 @@ def test_failed_auth_deletion_leaves_a_working_account_and_can_be_retried(acct):
     assert delete(failing, token_for(USER)).status_code == 500
     assert USER in auth.users and client.get("/api/user/me", headers=token_for(USER)).status_code == 200
     assert delete(client, token_for(USER)).status_code == 200 and USER not in auth.users
+
+
+def test_deleting_your_own_account_leaves_a_notice_so_signing_in_can_say_so(acct):
+    _, _, auth, _, client = acct
+    assert delete(client, token_for(USER)).status_code == 200
+    assert auth.notices == [("a@b.c", USER, "user")]

@@ -109,6 +109,8 @@ is Postgres + pgvector via the **same Supabase project** already used for auth
 | PUT / DELETE | `/api/user/push-token` | Register / remove this install's Expo push token |
 | DELETE | `/api/user/me` | Permanently delete the caller's own account (body `{"confirm": true}`); cancels a billing Razorpay subscription first |
 | POST / GET | `/api/help-center/queries` | Support queries, stored with the user's name |
+| POST | `/api/admin/users/:id/suspend`, `/unsuspend`, `/delete` | Account actions for the admin dashboard. **Server-to-server**: needs the shared `X-Admin-Key` (`ADMIN_API_KEY`); off if it is unset. Each is audited |
+| POST | `/api/auth/account-notice` | Public, rate limited: after a failed sign-in, "was this account deleted?" (one word answer) |
 | GET | `/api/subscription/receipts` | The caller's paid invoices, read from Razorpay |
 
 ### Database migrations
@@ -118,7 +120,7 @@ to re-run, and none writes a history table. Run them in this order on a new proj
 needs them:
 
 `schema.sql` → `subscriptions.sql` → `subscriptions_002_manual_trial.sql` → `help_center.sql` → `payments.sql` →
-`reel_jobs.sql` → `user_features.sql`
+`reel_jobs.sql` → `user_features.sql` → `account_actions.sql`
 
 To check what a project has applied, query each table/column (a missing one answers "table not found" / "column does not
 exist"); indexes and constraints cannot be inspected through the API, so confirm those in the SQL editor.
@@ -135,6 +137,19 @@ Firebase project): create a Firebase project, add the Android app `com.servex.re
 in the app project and set `android.googleServicesFile` in `app.json`, then upload an FCM v1 service-account key with
 `eas credentials`. Until then the app cannot obtain a push token, nothing is sent from here, and the app falls back to
 local notifications while it is still running.
+
+### Suspending and deleting accounts from the admin dashboard
+
+The dashboard (a separate Next.js site) calls `/api/admin/users/:id/{suspend,unsuspend,delete}` with the shared secret
+`ADMIN_API_KEY`, which must be set to the same 24+ character value here and on the dashboard.
+
+- **Suspend** bans the user in Supabase Auth. Supabase then refuses their sign-in with `user_banned` (the app shows a
+  suspension message) and refuses to refresh their session; this backend also rejects the session they still hold
+  (`403 ACCOUNT_SUSPENDED`), within a minute at most. **Reinstate** lifts it. Nothing is deleted.
+- **Delete** uses the same routine as a user deleting their own account (cancels a billing Razorpay subscription first,
+  and refuses to delete if that fails), then keeps a keyed hash of the email in `deleted_accounts` so that
+  `POST /api/auth/account-notice` can tell the person their account was deleted. The email itself is not kept.
+- Every action is written to `admin_actions` (who, what, whom, when). Acting on your own account is refused.
 
 ### Account deletion
 

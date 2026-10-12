@@ -12,7 +12,7 @@ import pytest
 _MODULES = [
     "pipeline.storage.supabase_store", "pipeline.storage.job_store", "pipeline.storage.subscription_store",
     "pipeline.storage.payment_store", "pipeline.storage.help_store", "pipeline.storage.preference_store",
-    "pipeline.storage.push_store", "pipeline.storage.account_store",
+    "pipeline.storage.push_store", "pipeline.storage.account_store", "pipeline.storage.admin_store",
 ]
 
 

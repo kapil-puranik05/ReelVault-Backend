@@ -8,7 +8,7 @@ import logging
 from api import account_guard, razorpay_client, subscription_logic
 from api.deps import CurrentUser
 from api.errors import ApiError
-from pipeline.storage import account_store, subscription_store
+from pipeline.storage import account_store, admin_store, subscription_store
 
 logger = logging.getLogger("reelvault.account")
 
@@ -46,9 +46,20 @@ def _stop_billing(user_id: str) -> None:
             ) from exc
 
 
+def delete_user(user_id: str, email: str, deleted_by: str) -> None:
+    """Permanently deletes an account. `deleted_by` is 'user' (their own request) or 'admin'."""
+    _stop_billing(user_id)                   # 1. stop future charges (idempotent: repeating it is harmless)
+    account_store.delete_auth_user(user_id)  # 2. remove the auth user; foreign keys cascade all of their data
+    account_guard.mark_deleted(user_id)      # 3. reject any still-valid session token immediately
+    if email:
+        try:
+            # 4. remember (as a keyed hash, not the address) that this account was deleted, so signing in can say so
+            admin_store.record_deleted(email, user_id, deleted_by)
+        except Exception:
+            logger.exception("Account %s was deleted but the deletion notice could not be saved", user_id)
+    logger.info("Account %s deleted (by %s)", user_id, deleted_by)
+
+
 def delete_account(user: CurrentUser) -> None:
     """Deletes the signed-in user's own account. The id comes from the verified session token, never from the request."""
-    _stop_billing(user.id)               # 1. stop future charges (idempotent: repeating it is harmless)
-    account_store.delete_auth_user(user.id)  # 2. remove the auth user; foreign keys cascade all of their data
-    account_guard.mark_deleted(user.id)  # 3. reject any still-valid session token immediately
-    logger.info("Account %s deleted", user.id)
+    delete_user(user.id, user.email, "user")
