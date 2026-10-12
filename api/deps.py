@@ -26,6 +26,7 @@ import jwt
 from fastapi import Depends, Header
 from jwt import PyJWKClient
 
+from api import account_guard
 from api.errors import ApiError
 from pipeline.config import settings
 
@@ -78,6 +79,9 @@ def get_current_user(authorization: str | None = Header(default=None)) -> Curren
     sub = payload.get("sub")
     if not sub:
         raise ApiError(401, "Token is missing a subject claim")
+
+    if account_guard.is_deleted(sub):
+        raise ApiError(401, "This account has been deleted.", code="ACCOUNT_DELETED")
 
     meta = payload.get("user_metadata") or {}
     name = str(meta.get("display_name") or meta.get("name") or meta.get("full_name") or "").strip()

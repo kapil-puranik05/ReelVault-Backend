@@ -103,6 +103,45 @@ is Postgres + pgvector via the **same Supabase project** already used for auth
 | GET | `/api/reels/search?q=` | Semantic search via the `search_reels()` pgvector function |
 | DELETE | `/api/reels/:id` | Delete a reel (ownership-checked) |
 | GET | `/api/user/me` | Current user profile |
+| POST | `/api/reels/queue` | Accepts a link and returns at once (202); a background job saves the reel, so the app may close |
+| GET / DELETE | `/api/reels/jobs`, `/api/reels/jobs/:id` | Background saves (queued / processing / done / failed); dismiss a finished one |
+| GET / PUT | `/api/user/preferences` | Faster Search entitlement + switch. Turning it on without Premium → 403 `PREMIUM_REQUIRED` |
+| PUT / DELETE | `/api/user/push-token` | Register / remove this install's Expo push token |
+| DELETE | `/api/user/me` | Permanently delete the caller's own account (body `{"confirm": true}`); cancels a billing Razorpay subscription first |
+| POST / GET | `/api/help-center/queries` | Support queries, stored with the user's name |
+| GET | `/api/subscription/receipts` | The caller's paid invoices, read from Razorpay |
+
+### Database migrations
+
+There is no migration framework: the SQL files in `supabase/` are run by hand in the Supabase SQL editor, each is safe
+to re-run, and none writes a history table. Run them in this order on a new project, and **before deploying** code that
+needs them:
+
+`schema.sql` → `subscriptions.sql` → `subscriptions_002_manual_trial.sql` → `help_center.sql` → `payments.sql` →
+`reel_jobs.sql` → `user_features.sql`
+
+To check what a project has applied, query each table/column (a missing one answers "table not found" / "column does not
+exist"); indexes and constraints cannot be inspected through the API, so confirm those in the SQL editor.
+
+### Background saving and "reel is ready" notifications
+
+`POST /api/reels/queue` writes a row to `reel_jobs` and a small thread pool (`REEL_JOB_WORKERS`, default 2) runs the
+pipeline, so the request never waits for the AI work. Jobs survive restarts (`recover_on_startup`). When a job finishes
+the backend sends **one** push through Expo's free push service (guarded by `reel_jobs.notified_at`); failed jobs never
+send a success notification.
+
+Delivery to a phone whose app is closed needs Firebase Cloud Messaging for the Android app (free, but it needs your
+Firebase project): create a Firebase project, add the Android app `com.servex.reelvault`, put its `google-services.json`
+in the app project and set `android.googleServicesFile` in `app.json`, then upload an FCM v1 service-account key with
+`eas credentials`. Until then the app cannot obtain a push token, nothing is sent from here, and the app falls back to
+local notifications while it is still running.
+
+### Account deletion
+
+`DELETE /api/user/me` takes the account from the verified session only. It cancels a Razorpay subscription that can still
+bill (and refuses to delete if that fails, so nobody is charged after deletion), then removes the Supabase Auth user;
+every per-user table cascades. `payments` rows are kept with the user link cleared. A deleted account's still-valid
+token is rejected immediately (checked against Supabase, cached for 5 minutes per instance).
 
 ### Run it
 

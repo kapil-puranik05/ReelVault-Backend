@@ -3,8 +3,13 @@ from __future__ import annotations
 import logging
 import re
 
-from fastapi import APIRouter, Depends
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
+from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
+
+from api import reel_jobs
 from api.deps import CurrentUser, require_active_subscription
 from api.errors import ApiError
 from api.rate_limit import check_rate_limit
@@ -12,7 +17,7 @@ from api.schemas import SaveReelRequest, record_to_dto, search_result_to_dto
 from pipeline.config import settings
 from pipeline.orchestrator import process_reel
 from pipeline.processors.summarizer import embed_query
-from pipeline.storage import supabase_store
+from pipeline.storage import job_store, supabase_store
 
 router = APIRouter(prefix="/api/reels", tags=["reels"])
 logger = logging.getLogger("reelvault.reels")
@@ -41,6 +46,66 @@ def save_reel(body: SaveReelRequest, user: CurrentUser = Depends(require_active_
     # SupabaseNotConfigured, if raised here, is handled globally (api/errors.py).
     saved = supabase_store.save_reel(result.reel)
     return record_to_dto(saved)
+
+
+def _job_dto(job: dict[str, Any]) -> dict[str, Any]:
+    failed = job["status"] == "FAILED"
+    return {
+        "id": job["id"],
+        "url": job["url"],
+        "status": job["status"],
+        "reelId": job.get("reel_id"),
+        # Internal error detail stays in the database / logs; the app only gets a plain sentence.
+        "message": "We couldn't save this reel. The link may be private or unsupported." if failed else None,
+        "createdAt": job["created_at"],
+        "updatedAt": job["updated_at"],
+    }
+
+
+@router.post("/queue", status_code=202)
+def queue_reel(body: SaveReelRequest, user: CurrentUser = Depends(require_active_subscription)):
+    """Accepts a link and returns at once; the reel is saved by a background job, so the app may close right
+    after this call. Poll GET /jobs (or just reload the library later) to see the result."""
+    check_rate_limit(f"reels:queue:{user.id}", limit=10, window_seconds=60)
+    url = str(body.url)
+
+    reel_id = supabase_store.find_reel_id_by_url(user.id, url)
+    if reel_id:
+        return JSONResponse(status_code=200, content={"status": "ALREADY_SAVED", "reelId": reel_id})
+
+    active = job_store.find_active_by_url(user.id, url)
+    if active:
+        return _job_dto(active)  # same link shared twice while it's still being processed
+
+    if job_store.count_active(user.id) >= settings.reel_job_max_active_per_user:
+        raise ApiError(429, "Too many reels are still being saved. Please wait for some to finish.")
+
+    try:
+        job = job_store.create(user.id, url)
+    except Exception as exc:
+        # Lost a race with an identical request: the one-active-job-per-link index rejected this insert.
+        job = job_store.find_active_by_url(user.id, url) if "23505" in str(exc) else None
+        if not job:
+            raise
+    reel_jobs.submit(job["id"])
+    return _job_dto(job)
+
+
+@router.get("/jobs")
+def list_jobs(user: CurrentUser = Depends(require_active_subscription)):
+    check_rate_limit(f"reels:jobs:{user.id}", limit=120, window_seconds=60)
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    return {"jobs": [_job_dto(j) for j in job_store.list_recent(user.id, since)]}
+
+
+@router.delete("/jobs/{job_id}")
+def dismiss_job(job_id: str, user: CurrentUser = Depends(require_active_subscription)):
+    check_rate_limit(f"reels:jobs:{user.id}", limit=120, window_seconds=60)
+    if not _UUID_RE.match(job_id):
+        raise ApiError(400, "Invalid id")
+    if not job_store.delete_finished(user.id, job_id):
+        raise ApiError(404, "Job not found or still running")
+    return {"success": True}
 
 
 @router.get("/search")

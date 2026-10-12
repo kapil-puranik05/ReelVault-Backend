@@ -105,6 +105,7 @@ class FakeRazorpay:
         self.payments: dict[str, dict] = {}
         self.payment_note_updates: list[tuple[str, dict]] = []
         self.fail_note_updates = False
+        self.cancel_error = None
 
     def install(self, monkeypatch):
         rz = self

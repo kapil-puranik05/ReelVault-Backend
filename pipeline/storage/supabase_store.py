@@ -115,6 +115,12 @@ def save_reel(record: ReelRecord) -> ReelRecord:
     return _row_to_record(response.data[0])
 
 
+def find_reel_id_by_url(user_id: str, url: str) -> str | None:
+    """The user's already-saved reel for this exact link, if any (so re-sharing a link doesn't save it twice)."""
+    res = get_client().table("reels").select("id").eq("user_id", user_id).eq("source_url", url).limit(1).execute()
+    return str(res.data[0]["id"]) if res.data else None
+
+
 def list_reels(user_id: str) -> list[ReelRecord]:
     client = get_client()
     response = (

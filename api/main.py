@@ -7,10 +7,13 @@ Run with: uvicorn api.main:app --reload --port 8000
 from __future__ import annotations
 
 import logging
+import threading
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api import reel_jobs
 from api.errors import register_error_handlers
 from api.routes import help_center, reels, subscription, user
 
@@ -22,7 +25,15 @@ if not _log.handlers:
     _log.addHandler(_handler)
     _log.setLevel(logging.INFO)
 
-app = FastAPI(title="ReelVault API (backend2 — Gemini vision pipeline)")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Re-run reels that were queued or mid-run when the server last stopped; in a thread so startup (and the
+    # health check Railway waits on) never waits for the database.
+    threading.Thread(target=reel_jobs.recover_on_startup, name="reel-job-recovery", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="ReelVault API (backend2 — Gemini vision pipeline)", lifespan=lifespan)
 
 # Wildcard is intentional for local development across Expo's web/native
 # targets. Narrow this to the deployed app's real origin in production.

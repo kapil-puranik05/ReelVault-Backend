@@ -93,6 +93,17 @@ class PipelineSettings(BaseSettings):
     reel_save_price: float = Field(default=40)
     reel_save_limit: int | None = Field(default=None)
 
+    # Background reel saving (shared links): how many videos this server processes at once, how long a job may sit
+    # in PROCESSING before it is presumed dead after a restart, and how often it is retried before giving up.
+    reel_job_workers: int = Field(default=2)
+    reel_job_stale_minutes: int = Field(default=15)
+    reel_job_max_attempts: int = Field(default=3)
+    reel_job_max_active_per_user: int = Field(default=10)
+
+    # Push notifications go through Expo's free push service. The token is only needed if "Enhanced Push Security"
+    # is switched on for the Expo project; leave empty otherwise.
+    expo_access_token: str = Field(default="", description="EXPO_ACCESS_TOKEN, optional")
+
     razorpay_key_id: str = Field(default="", description="Public key id; safe to return to clients")
     razorpay_key_secret: str = Field(default="", description="Server-side only")
     razorpay_webhook_secret: str = Field(default="", description="Secret configured on the Razorpay webhook")

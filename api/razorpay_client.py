@@ -91,6 +91,11 @@ def fetch_subscription(subscription_id: str) -> dict[str, Any]:
     return _request("GET", f"/subscriptions/{subscription_id}")
 
 
+def cancel_subscription(subscription_id: str) -> dict[str, Any]:
+    """Cancel immediately (no further charges)."""
+    return _request("POST", f"/subscriptions/{subscription_id}/cancel", {"cancel_at_cycle_end": 0})
+
+
 def fetch_payment(payment_id: str) -> dict[str, Any]:
     return _request("GET", f"/payments/{payment_id}")
 

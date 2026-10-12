@@ -140,6 +140,12 @@ def sync_from_razorpay(user_id: str, row: dict[str, Any]) -> dict[str, Any]:
     return apply_razorpay_subscription(user_id, rz)
 
 
+def entitlements(row: dict[str, Any], now: datetime | None = None) -> dict[str, bool]:
+    """What the user's plan includes. The single source of truth: the app only mirrors this, and the preference
+    endpoint enforces it. Faster Search is a paid-plan feature (a free trial does not include it)."""
+    return {"fasterSearch": access_reason(row, now) == "PAID"}
+
+
 def price_display() -> str:
     amount = settings.paid_plan_price
     symbol = {"INR": "₹"}.get(settings.paid_plan_currency, settings.paid_plan_currency + " ")
@@ -168,6 +174,7 @@ def to_dto(row: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "hasAccess": reason != "NONE",
+        "entitlements": entitlements(row, now),
         "accessReason": reason,
         "status": row["status"],
         "plan": "PREMIUM" if reason == "PAID" or (has_paid_history and reason == "NONE") else "FREE_TRIAL",
